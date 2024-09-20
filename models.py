@@ -49,19 +49,21 @@ class SelfAttentionHead(nn.Module):
         # to normalize the weights and preseve variance
         # mathematically (B, T, C) x (B , C, T) --> (B, T, T)
 
-        weights = weights.masked_fill(self.tril(:T, :T) == 0, float('-inf'))
-        weights = F.softmax(weights, dim=-1)
-        v = self.value(x)
-        out = weights @ v
+        weights = weights.masked_fill(self.tril[:T, :T] == 0, float("-inf"))  # B,T,T
+        weights = F.softmax(weights, dim=-1)  # B,T,T
+        v = self.value(x)  # B,T,C
+        out = weights @ v  # B,T,T x B,T,C --> B,T,C
         return out
 
 
 class SelfAttentionModel(nn.Module):
-    def __init__(self, vocab_size, n_embed, block_size):
+    def __init__(self, vocab_size, n_embed, block_size, head_size):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embed)
         self.position_embedding_table = nn.Embedding(block_size, n_embed)
+        self.sa_head = SelfAttentionHead(head_size, n_embed, block_size)
         self.lm_head = nn.Linear(n_embed, vocab_size)
+        self.block_size = block_size
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
@@ -72,6 +74,7 @@ class SelfAttentionModel(nn.Module):
             torch.arange(T)
         )  # output shape (B, T, V)
         x = token_embedding * position_embedding  # output shape -- (B,T,n_embed)
+        x = self.sa_head(x)  # calling the self attention --> (B,T,n_embed)
         logits = self.lm_head(x)  # output shape -- (B, T, V)
         if targets == None:
             return logits, None
@@ -84,7 +87,10 @@ class SelfAttentionModel(nn.Module):
 
     def generate(self, idx, max_length):
         for _ in range(max_length):
-            logits, loss = self(idx)
+            idx_cropped = idx[
+                :, -self.block_size :
+            ]  # slicing the idx to limit to block size
+            logits, loss = self(idx_cropped)
             logits = logits[:, -1, :]
             probs = F.softmax(logits, dim=1)
             id_next = torch.multinomial(probs, num_samples=1)
